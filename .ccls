@@ -1,0 +1,7 @@
+g++
+-std=c++23
+-isystem./common
+-isystem./overlay/libtesla/include
+-isystem./sys/libnx/include
+-DVERSION_WITH_HASH="1.5.2"
+-DBUILD_DATE=""

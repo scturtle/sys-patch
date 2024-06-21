@@ -20,19 +20,12 @@ export VERSION_DIRTY := $(VERSION)-dirty
 export VERSION_WITH_HASH := $(VERSION)-$(shell git rev-parse --short HEAD)-dirty
 endif
 
-export BUILD_DATE := -DDATE_YEAR=\"$(shell date +%Y)\" \
-					-DDATE_MONTH=\"$(shell date +%m)\" \
-					-DDATE_DAY=\"$(shell date +%d)\" \
-					-DDATE_HOUR=\"$(shell date +%H)\" \
-					-DDATE_MIN=\"$(shell date +%M)\" \
-					-DDATE_SEC=\"$(shell date +%S)\" \
-
 export CUSTOM_DEFINES := -DVERSION=\"v$(VERSION)\" \
 					-DGIT_BRANCH=\"$(GIT_BRANCH)\" \
 					-DGIT_REVISION=\"$(GIT_REVISION)\" \
 					-DVERSION_DIRTY=\"$(VERSION_DIRTY)\" \
 					-DVERSION_WITH_HASH=\"$(VERSION_WITH_HASH)\" \
-					$(BUILD_DATE)
+					-DBUILD_DATE=\"$(shell date '+%d.%m.%Y_%H:%M:%S')\"
 
 all: $(TARGETS)
 	@mkdir -p out/

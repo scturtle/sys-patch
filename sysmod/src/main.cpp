@@ -1,24 +1,23 @@
+#include "minIni/minIni.h"
+#include <algorithm> // for std::min
+#include <bit>       // for std::byteswap
 #include <cstring>
 #include <span>
-#include <algorithm> // for std::min
-#include <bit> // for std::byteswap
-#include <utility> // std::unreachable
 #include <switch.h>
-#include "minIni/minIni.h"
+#include <utility> // std::unreachable
 
 namespace {
 
-constexpr u64 INNER_HEAP_SIZE = 0x1000; // Size of the inner heap (adjust as necessary).
-constexpr u64 READ_BUFFER_SIZE = 0x1000; // size of static buffer which memory is read into
+// Size of the inner heap (adjust as necessary).
+constexpr u64 INNER_HEAP_SIZE = 0x1000;
+// size of static buffer which memory is read into
+constexpr u64 READ_BUFFER_SIZE = 0x1000;
 constexpr u32 FW_VER_ANY = 0x0;
 constexpr u16 REGEX_SKIP = 0x100;
 
-u32 FW_VERSION{}; // set on startup
-u32 AMS_VERSION{}; // set on startup
-u32 AMS_TARGET_VERSION{}; // set on startup
-u8 AMS_KEYGEN{}; // set on startup
-u64 AMS_HASH{}; // set on startup
-bool VERSION_SKIP{}; // set on startup
+// set on startup
+u32 FW_VERSION;
+u32 AMS_VERSION;
 
 struct DebugEventInfo {
     u32 event_type;
@@ -31,24 +30,34 @@ struct DebugEventInfo {
     u8 _0x30[0x10];
 };
 
-template<typename T>
-constexpr void str2hex(const char* s, T* data, u8& size) {
+template <typename T>
+constexpr void str2hex(const char *s, T *data, u8 &size) {
     // skip leading 0x (if any)
     if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
         s += 2;
     }
 
-    // invalid string will cause a compile-time error due to no return
     constexpr auto hexstr_2_nibble = [](char c) -> u8 {
-        if (c >= 'A' && c <= 'F') { return c - 'A' + 10; }
-        if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }
-        if (c >= '0' && c <= '9') { return c - '0'; }
+        if (c >= 'A' && c <= 'F') {
+            return c - 'A' + 10;
+        }
+        if (c >= 'a' && c <= 'f') {
+            return c - 'a' + 10;
+        }
+        if (c >= '0' && c <= '9') {
+            return c - '0';
+        }
+        std::unreachable();
     };
 
     // parse and convert string
     while (*s != '\0') {
-        if (sizeof(T) == sizeof(u16) && *s == '.') {
-            data[size] = REGEX_SKIP;
+        if (*s == '.') {
+            if (std::is_same_v<T, u16>) {
+                data[size] = REGEX_SKIP;
+            } else {
+                std::unreachable();
+            }
             s++;
         } else {
             data[size] |= hexstr_2_nibble(*s++) << 4;
@@ -59,31 +68,16 @@ constexpr void str2hex(const char* s, T* data, u8& size) {
 }
 
 struct PatternData {
-    constexpr PatternData(const char* s) {
-        str2hex(s, data, size);
-    }
-
+    constexpr PatternData(const char *s) { str2hex(s, data, size); }
     u16 data[44]{}; // reasonable max pattern length, adjust as needed
     u8 size{};
 };
 
 struct PatchData {
-    constexpr PatchData(const char* s) {
-        str2hex(s, data, size);
-    }
-
-    template<typename T>
-    constexpr PatchData(T v) {
-        for (u32 i = 0; i < sizeof(T); i++) {
-            data[size++] = v & 0xFF;
-            v >>= 8;
-        }
-    }
-
-    auto cmp(const void* _data) -> bool {
+    constexpr PatchData(const char *s) { str2hex(s, data, size); }
+    auto cmp(const void *_data) -> bool {
         return !std::memcmp(data, _data, size);
     }
-
     u8 data[20]{}; // reasonable max patch length, adjust as needed
     u8 size{};
 };
@@ -98,81 +92,39 @@ enum class PatchResult {
 };
 
 struct Patterns {
-    const char* patch_name; // name of patch
+    const char *patch_name;         // name of patch
     const PatternData byte_pattern; // the pattern to search
 
-    const s32 inst_offset; // instruction offset relative to byte pattern
+    const s32 inst_offset;  // instruction offset relative to byte pattern
     const s32 patch_offset; // patch offset relative to inst_offset
 
-    bool (*const cond)(u32 inst); // check condition of the instruction
-    PatchData (*const patch)(u32 inst); // the patch data to be applied
-    bool (*const applied)(const u8* data, u32 inst); // check to see if patch already applied
+    bool (*const cond)(u32 inst);                    // check condition of the instruction
+    PatchData (*const patch)(u32 inst);              // the patch data to be applied
+    bool (*const applied)(const u8 *data, u32 inst); // check to see if patch already applied
 
     bool enabled; // controlled by config.ini
-
-    const u32 min_fw_ver{FW_VER_ANY}; // set to FW_VER_ANY to ignore
-    const u32 max_fw_ver{FW_VER_ANY}; // set to FW_VER_ANY to ignore
-    const u32 min_ams_ver{FW_VER_ANY}; // set to FW_VER_ANY to ignore
-    const u32 max_ams_ver{FW_VER_ANY}; // set to FW_VER_ANY to ignore
 
     PatchResult result{PatchResult::NOT_FOUND};
 };
 
 struct PatchEntry {
-    const char* name; // name of the system title
-    const u64 title_id; // title id of the system title
+    const char *name;                   // name of the system title
+    const u64 title_id;                 // title id of the system title
     const std::span<Patterns> patterns; // list of patterns to find
-    const u32 min_fw_ver{FW_VER_ANY}; // set to FW_VER_ANY to ignore
-    const u32 max_fw_ver{FW_VER_ANY}; // set to FW_VER_ANY to ignore
 };
 
-constexpr auto subi_cond(u32 inst) -> bool {
-    // # Used on Atmosphère-NX 0.11.0 - 0.12.0.
-    const auto type = (inst >> 24) & 0xFF;
-    const auto imm = (inst >> 10) & 0xFFF;
-    return (type == 0x71) && (imm == 0x0A);
-}
-
-constexpr auto subr_cond(u32 inst) -> bool {
-    // # Used on Atmosphère-NX 0.13.0 and later.
+constexpr auto subs_cond(u32 inst) -> bool {
     const auto type = (inst >> 21) & 0x7F9;
     const auto reg = (inst >> 16) & 0x1F;
     return (type == 0x358) && (reg == 0x01);
-}
-
-constexpr auto bl_cond(u32 inst) -> bool {
-    return ((inst >> 26) & 0x3F) == 0x25;
 }
 
 constexpr auto tbz_cond(u32 inst) -> bool {
     return ((inst >> 24) & 0x7F) == 0x36;
 }
 
-constexpr auto subs_cond(u32 inst) -> bool {
-    return subi_cond(inst) || subr_cond(inst);
-}
-
-constexpr auto cbz_cond(u32 inst) -> bool {
-    const auto type = inst >> 24;
-    return type == 0x34 || type == 0xB4;
-}
-
-constexpr auto mov_cond(u32 inst) -> bool {
-    return ((inst >> 24) & 0x7F) == 0x52;
-}
-
 constexpr auto mov2_cond(u32 inst) -> bool {
-    if (hosversionBefore(15,0,0)) {
-        return (inst >> 24) == 0x92; // and x0, x19, #0xffffffff
-    } else {
-        return (inst >> 24) == 0x2A; // mov x0, x20
-    }
-}
-
-constexpr auto bne_cond(u32 inst) -> bool {
-    const auto type = inst >> 24;
-    const auto cond = inst & 0x10;
-    return type == 0x54 || cond == 0x0;
+    return (inst >> 24) == 0x2A;
 }
 
 constexpr auto ctest_cond(u32 inst) -> bool {
@@ -180,88 +132,52 @@ constexpr auto ctest_cond(u32 inst) -> bool {
 }
 
 // to view patches, use https://armconverter.com/?lock=arm64
-constexpr PatchData ret0_patch_data{ "0xE0031F2A" };
-constexpr PatchData nop_patch_data{ "0x1F2003D5" };
-constexpr PatchData mov0_patch_data{ "0xE0031FAA" };
-constexpr PatchData ctest_patch_data{ "0x00309AD2001EA1F2610100D4E0031FAAC0035FD6" };
+constexpr auto nop_patch(u32 inst) -> PatchData { return "0x1F2003D5"; }
+constexpr auto subs_patch(u32 inst) -> PatchData { return "0x00"; }
+constexpr auto mov0_patch(u32 inst) -> PatchData { return "0xE0031FAA"; }
+constexpr auto ctest_patch(u32 inst) -> PatchData { return "0xE0031FAAC0035FD6"; }
 
-constexpr auto ret0_patch(u32 inst) -> PatchData { return ret0_patch_data; }
-constexpr auto nop_patch(u32 inst) -> PatchData { return nop_patch_data; }
-constexpr auto subs_patch(u32 inst) -> PatchData { return subi_cond(inst) ? (u8)0x1 : (u8)0x0; }
-constexpr auto mov0_patch(u32 inst) -> PatchData { return mov0_patch_data; }
-constexpr auto ctest_patch(u32 inst) -> PatchData { return ctest_patch_data; }
-
-constexpr auto b_patch(u32 inst) -> PatchData {
-    const u32 opcode = 0x14 << 24;
-    const u32 offset = (inst >> 5) & 0x7FFFF;
-    return opcode | offset;
-}
-
-constexpr auto ret0_applied(const u8* data, u32 inst) -> bool {
-    return ret0_patch(inst).cmp(data);
-}
-
-constexpr auto nop_applied(const u8* data, u32 inst) -> bool {
+constexpr auto nop_applied(const u8 *data, u32 inst) -> bool {
     return nop_patch(inst).cmp(data);
 }
 
-constexpr auto subs_applied(const u8* data, u32 inst) -> bool {
-    const auto type_i = (inst >> 24) & 0xFF;
-    const auto imm = (inst >> 10) & 0xFFF;
+constexpr auto subs_applied(const u8 *data, u32 inst) -> bool {
     const auto type_r = (inst >> 21) & 0x7F9;
     const auto reg = (inst >> 16) & 0x1F;
-    return ((type_i == 0x71) && (imm == 0x1)) || ((type_r == 0x358) && (reg == 0x0));
+    return ((type_r == 0x358) && (reg == 0x0));
 }
 
-constexpr auto b_applied(const u8* data, u32 inst) -> bool {
-    return 0x14 == (inst >> 24);
-}
-
-constexpr auto mov0_applied(const u8* data, u32 inst) -> bool {
+constexpr auto mov0_applied(const u8 *data, u32 inst) -> bool {
     return mov0_patch(inst).cmp(data);
 }
 
-constexpr auto ctest_applied(const u8* data, u32 inst) -> bool {
+constexpr auto ctest_applied(const u8 *data, u32 inst) -> bool {
     return ctest_patch(inst).cmp(data);
 }
 
 constinit Patterns fs_patterns[] = {
-    { "noacidsigchk1", "0xC8FE4739", -24, 0, bl_cond, ret0_patch, ret0_applied, true, FW_VER_ANY, MAKEHOSVERSION(9,2,0) },
-    { "noacidsigchk2", "0x0210911F000072", -5, 0, bl_cond, ret0_patch, ret0_applied, true, FW_VER_ANY, MAKEHOSVERSION(9,2,0) },
-    { "noncasigchk_old", "0x1E42B9", -5, 0, tbz_cond, nop_patch, nop_applied, true, MAKEHOSVERSION(10,0,0), MAKEHOSVERSION(14,2,1) },
-    { "noncasigchk_new", "0x3E4479", -5, 0, tbz_cond, nop_patch, nop_applied, true, MAKEHOSVERSION(15,0,0), MAKEHOSVERSION(16,1,0) },
-    { "noncasigchk_new2", "0x258052", -5, 0, tbz_cond, nop_patch, nop_applied, true, MAKEHOSVERSION(17,0,0) },
-    { "nocntchk_old", "0x081C00121F05007181000054", -4, 0, bl_cond, ret0_patch, ret0_applied, true, MAKEHOSVERSION(10,0,0), MAKEHOSVERSION(14,2,1) },
-    { "nocntchk_new", "0x081C00121F05007141010054", -4, 0, bl_cond, ret0_patch, ret0_applied, true, MAKEHOSVERSION(15,0,0) },
+    {"noncasigchk", "0x4010003602258052", 0, 0, tbz_cond, nop_patch, nop_applied, true},
 };
 
 constinit Patterns ldr_patterns[] = {
-    { "noacidsigchk", "0xFD7B.A8C0035FD6", 16, 2, subs_cond, subs_patch, subs_applied, true },
+    {"noacidsigchk", "0xFD7B.A8C0035FD6", 16, 2, subs_cond, subs_patch, subs_applied, true},
 };
 
 constinit Patterns es_patterns[] = {
-    { "es1", "0x1F90013128928052", -4, 0, cbz_cond, b_patch, b_applied, true, FW_VER_ANY, MAKEHOSVERSION(13,2,1) },
-    { "es2", "0xC07240F9E1930091", -4, 0, tbz_cond, nop_patch, nop_applied, true, FW_VER_ANY, MAKEHOSVERSION(10,2,0) },
-    { "es3", "0xF3031FAA02000014", -4, 0, bne_cond, nop_patch, nop_applied, true, FW_VER_ANY, MAKEHOSVERSION(10,2,0) },
-    { "es4", "0xC0FDFF35A8C35838", -4, 0, mov_cond, nop_patch, nop_applied, true, MAKEHOSVERSION(11,0,0), MAKEHOSVERSION(13,2,1) },
-    { "es5", "0xE023009145EEFF97", -4, 0, cbz_cond, b_patch, b_applied, true, MAKEHOSVERSION(11,0,0), MAKEHOSVERSION(13,2,1) },
-    { "es6", "0x.6300...0094A0..D1..FF97", 16, 0, mov2_cond, mov0_patch, mov0_applied, true, MAKEHOSVERSION(14,0,0), MAKEHOSVERSION(17,0,1) },
-    { "es7", "0x.6F00...0094A0..D1..FF97", 16, 0, mov2_cond, mov0_patch, mov0_applied, true, MAKEHOSVERSION(18,0,0) },
+    {"es", "0x33D28552", 28, 0, mov2_cond, mov0_patch, mov0_applied, true},
 };
 
 constinit Patterns nifm_patterns[] = {
-    { "ctest", "....................F40300AA....F30314AAE00314AA9F0201397F8E04F8", 16, -16, ctest_cond, ctest_patch, ctest_applied, true },
+    {"ctest", "....................F40300AA....F30314AAE00314AA9F0201397F8E04F8",
+     16, -16, ctest_cond, ctest_patch, ctest_applied, true},
 };
 
-// NOTE: add system titles that you want to be patched to this table.
-// a list of system titles can be found here https://switchbrew.org/wiki/Title_list
+// https://switchbrew.org/wiki/Title_list
 constinit PatchEntry patches[] = {
-    { "fs", 0x0100000000000000, fs_patterns },
-    // ldr needs to be patched in fw 10+
-    { "ldr", 0x0100000000000001, ldr_patterns, MAKEHOSVERSION(10,0,0) },
-    // es was added in fw 2
-    { "es", 0x0100000000000033, es_patterns, MAKEHOSVERSION(2,0,0) },
-    { "nifm", 0x010000000000000F, nifm_patterns },
+    {"fs", 0x0100000000000000, fs_patterns},
+    {"ldr", 0x0100000000000001, ldr_patterns},
+    {"es", 0x0100000000000033, es_patterns},
+    {"nifm", 0x010000000000000F, nifm_patterns},
 };
 
 struct EmummcPaths {
@@ -269,10 +185,10 @@ struct EmummcPaths {
     char nintendo[0x80];
 };
 
-void smcAmsGetEmunandConfig(EmummcPaths* out_paths) {
+void smcAmsGetEmunandConfig(EmummcPaths *out_paths) {
     SecmonArgs args{};
-    args.X[0] = 0xF0000404; /* smcAmsGetEmunandConfig */
-    args.X[1] = 0; /* EXO_EMUMMC_MMC_NAND*/
+    args.X[0] = 0xF0000404;     /* smcAmsGetEmunandConfig */
+    args.X[1] = 0;              /* EXO_EMUMMC_MMC_NAND*/
     args.X[2] = (u64)out_paths; /* out path */
     svcCallSecureMonitor(&args);
 }
@@ -284,19 +200,9 @@ auto is_emummc() -> bool {
 }
 
 void patcher(Handle handle, std::span<const u8> data, u64 addr, std::span<Patterns> patterns) {
-    for (auto& p : patterns) {
+    for (auto &p : patterns) {
         // skip if disabled (controller by config.ini)
         if (p.result == PatchResult::DISABLED) {
-            continue;
-        }
-
-        // skip if version isn't valid
-        if (VERSION_SKIP &&
-            ((p.min_fw_ver && p.min_fw_ver > FW_VERSION) ||
-            (p.max_fw_ver && p.max_fw_ver < FW_VERSION) ||
-            (p.min_ams_ver && p.min_ams_ver > AMS_VERSION) ||
-            (p.max_ams_ver && p.max_ams_ver < AMS_VERSION))) {
-            p.result = PatchResult::SKIPPED;
             continue;
         }
 
@@ -313,25 +219,31 @@ void patcher(Handle handle, std::span<const u8> data, u64 addr, std::span<Patter
             // loop through every byte of the pattern data to find a match
             // skipping over any bytes if the value is REGEX_SKIP
             u32 count{};
-            while (count < p.byte_pattern.size) {
-                if (p.byte_pattern.data[count] != data[i + count] && p.byte_pattern.data[count] != REGEX_SKIP) {
+            for (; count < p.byte_pattern.size; count++) {
+                if (p.byte_pattern.data[count] != data[i + count] &&
+                    p.byte_pattern.data[count] != REGEX_SKIP) {
                     break;
                 }
-                count++;
             }
 
             // if we have found a matching pattern
             if (count == p.byte_pattern.size) {
                 // fetch the instruction
                 u32 inst{};
-                const auto inst_offset = i + p.inst_offset;
+                const s32 inst_offset = (s32)i + p.inst_offset;
+                if (inst_offset < 0 || inst_offset + (s32)sizeof(inst) >= (s32)data.size()) {
+                    continue;
+                }
                 std::memcpy(&inst, data.data() + inst_offset, sizeof(inst));
 
                 // check if the instruction is the one that we want
                 if (p.cond(inst)) {
                     const auto [patch_data, patch_size] = p.patch(inst);
                     const auto patch_offset = addr + inst_offset + p.patch_offset;
-
+                    if (inst_offset + p.patch_offset < 0 ||
+                        inst_offset + p.patch_offset + patch_size >= (s32)data.size()) {
+                        continue;
+                    }
                     // todo: log failed writes, although this should in theory never fail
                     if (R_FAILED(svcWriteDebugProcessMemory(handle, &patch_data, patch_offset, patch_size))) {
                         p.result = PatchResult::FAILED_WRITE;
@@ -350,23 +262,13 @@ void patcher(Handle handle, std::span<const u8> data, u64 addr, std::span<Patter
     }
 }
 
-auto apply_patch(PatchEntry& patch) -> bool {
+auto apply_patch(const PatchEntry &patch) -> bool {
     Handle handle{};
     DebugEventInfo event_info{};
 
     u64 pids[0x50]{};
     s32 process_count{};
     static u8 buffer[READ_BUFFER_SIZE];
-
-    // skip if version isn't valid
-    if (VERSION_SKIP &&
-        ((patch.min_fw_ver && patch.min_fw_ver > FW_VERSION) ||
-        (patch.max_fw_ver && patch.max_fw_ver < FW_VERSION))) {
-        for (auto& p : patch.patterns) {
-            p.result = PatchResult::SKIPPED;
-        }
-        return true;
-    }
 
     if (R_FAILED(svcGetProcessList(&process_count, pids, 0x50))) {
         return false;
@@ -391,7 +293,8 @@ auto apply_patch(PatchEntry& patch) -> bool {
                     break;
                 }
                 // skip memory that we don't want
-                if (!mem_info.size || (mem_info.perm & Perm_Rx) != Perm_Rx || ((mem_info.type & 0xFF) != MemType_CodeStatic)) {
+                if (!mem_info.size || (mem_info.perm & Perm_Rx) != Perm_Rx ||
+                    ((mem_info.type & 0xFF) != MemType_CodeStatic)) {
                     continue;
                 }
 
@@ -413,20 +316,17 @@ auto apply_patch(PatchEntry& patch) -> bool {
             handle = 0;
         }
     }
-
     return false;
 }
 
 // creates a directory, non-recursive!
-auto create_dir(const char* path) -> bool {
+auto create_dir(const char *path) -> bool {
     Result rc{};
     FsFileSystem fs{};
     char path_buf[FS_MAX_PATH]{};
-
     if (R_FAILED(fsOpenSdCardFileSystem(&fs))) {
         return false;
     }
-
     strcpy(path_buf, path);
     rc = fsFsCreateDirectory(&fs, path_buf);
     fsFsClose(&fs);
@@ -434,7 +334,8 @@ auto create_dir(const char* path) -> bool {
 }
 
 // same as ini_get but writes out the default value instead
-auto ini_load_or_write_default(const char* section, const char* key, long _default, const char* path) -> long {
+auto ini_load_or_write_default(const char *section, const char *key,
+                               long _default, const char *path) -> long {
     if (!ini_haskey(section, key, path)) {
         ini_putl(section, key, _default, path);
         return _default;
@@ -443,20 +344,25 @@ auto ini_load_or_write_default(const char* section, const char* key, long _defau
     }
 }
 
-auto patch_result_to_str(PatchResult result) -> const char* {
+auto patch_result_to_str(PatchResult result) -> const char * {
     switch (result) {
-        case PatchResult::NOT_FOUND: return "Unpatched";
-        case PatchResult::SKIPPED: return "Skipped";
-        case PatchResult::DISABLED: return "Disabled";
-        case PatchResult::PATCHED_FILE: return "Patched (file)";
-        case PatchResult::PATCHED_SYSPATCH: return "Patched (sys-patch)";
-        case PatchResult::FAILED_WRITE: return "Failed (svcWriteDebugProcessMemory)";
+    case PatchResult::NOT_FOUND:
+        return "Unpatched";
+    case PatchResult::SKIPPED:
+        return "Skipped";
+    case PatchResult::DISABLED:
+        return "Disabled";
+    case PatchResult::PATCHED_FILE:
+        return "Patched (file)";
+    case PatchResult::PATCHED_SYSPATCH:
+        return "Patched (sys-patch)";
+    case PatchResult::FAILED_WRITE:
+        return "Failed (svcWriteDebugProcessMemory)";
     }
-
     std::unreachable();
 }
 
-void num_2_str(char*& s, u16 num) {
+void num_2_str(char *&s, u16 num) {
     u16 max_v = 1000;
     if (num > 9) {
         while (max_v >= 10) {
@@ -474,7 +380,7 @@ void num_2_str(char*& s, u16 num) {
     *s++ = '0' + (num); // always add 0 or 1's
 }
 
-void ms_2_str(char* s, u32 num) {
+void ms_2_str(char *s, u32 num) {
     u32 max_v = 100;
     *s++ = '0' + (num / 1000); // add seconds
     num -= (num / 1000) * 1000;
@@ -487,18 +393,17 @@ void ms_2_str(char* s, u32 num) {
                 num -= (num / max_v) * max_v;
                 max_v /= 10;
             }
-        }
-        else {
-           *s++ = '0'; // append 0
-           max_v /= 10;
+        } else {
+            *s++ = '0'; // append 0
+            max_v /= 10;
         }
     }
     *s++ = '0' + (num); // always add 0 or 1's
-    *s++ = 's'; // in seconds
+    *s++ = 's';         // in seconds
 }
 
 // eg, 852481 -> 13.2.1
-void version_to_str(char* s, u32 ver) {
+void version_to_str(char *s, u32 ver) {
     for (int i = 0; i < 3; i++) {
         num_2_str(s, (ver >> 16) & 0xFF);
         if (i != 2) {
@@ -508,32 +413,9 @@ void version_to_str(char* s, u32 ver) {
     }
 }
 
-// eg, 0xAF66FF99 -> AF66FF99
-void hash_to_str(char* s, u32 hash) {
-    for (int i = 0; i < 4; i++) {
-        const auto num = (hash >> 24) & 0xFF;
-        const auto top = (num >> 4) & 0xF;
-        const auto bottom = (num >> 0) & 0xF;
-
-        constexpr auto a = [](u8 nib) -> char {
-            if (nib >= 0 && nib <= 9) { return '0' + nib; }
-            return 'a' + nib - 10;
-        };
-
-        *s++ = a(top);
-        *s++ = a(bottom);
-
-        hash <<= 8;
-    }
-}
-
-void keygen_to_str(char* s, u8 keygen) {
-    num_2_str(s, keygen);
-}
-
 } // namespace
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     constexpr auto ini_path = "/config/sys-patch/config.ini";
     constexpr auto log_path = "/config/sys-patch/log.ini";
 
@@ -542,14 +424,11 @@ int main(int argc, char* argv[]) {
     ini_remove(log_path);
 
     // load options
-    const auto patch_sysmmc = ini_load_or_write_default("options", "patch_sysmmc", 1, ini_path);
     const auto patch_emummc = ini_load_or_write_default("options", "patch_emummc", 1, ini_path);
-    const auto enable_logging = ini_load_or_write_default("options", "enable_logging", 1, ini_path);
-    VERSION_SKIP = ini_load_or_write_default("options", "version_skip", 1, ini_path);
 
     // load patch toggles
-    for (auto& patch : patches) {
-        for (auto& p : patch.patterns) {
+    for (auto &patch : patches) {
+        for (auto &p : patch.patterns) {
             p.enabled = ini_load_or_write_default(patch.name, p.patch_name, p.enabled, ini_path);
             if (!p.enabled) {
                 p.result = PatchResult::DISABLED;
@@ -560,11 +439,6 @@ int main(int argc, char* argv[]) {
     const auto emummc = is_emummc();
     bool enable_patching = true;
 
-    // check if we should patch sysmmc
-    if (!patch_sysmmc && !emummc) {
-        enable_patching = false;
-    }
-
     // check if we should patch emummc
     if (!patch_emummc && emummc) {
         enable_patching = false;
@@ -574,7 +448,7 @@ int main(int argc, char* argv[]) {
     const auto ticks_start = armGetSystemTick();
 
     if (enable_patching) {
-        for (auto& patch : patches) {
+        for (auto &patch : patches) {
             apply_patch(patch);
         }
     }
@@ -582,9 +456,10 @@ int main(int argc, char* argv[]) {
     const auto ticks_end = armGetSystemTick();
     const auto diff_ns = armTicksToNs(ticks_end) - armTicksToNs(ticks_start);
 
-    if (enable_logging) {
-        for (auto& patch : patches) {
-            for (auto& p : patch.patterns) {
+    {
+        // log patch results
+        for (auto &patch : patches) {
+            for (auto &p : patch.patterns) {
                 if (!enable_patching) {
                     p.result = PatchResult::SKIPPED;
                 }
@@ -598,33 +473,18 @@ int main(int argc, char* argv[]) {
         char ams_version[12]{};
         // lowest fw supported by atmosphere
         char ams_target_version[12]{};
-        // ???
-        char ams_keygen[3]{};
-        // git commit hash
-        char ams_hash[9]{};
         // how long it took to patch
         char patch_time[20]{};
 
         version_to_str(fw_version, FW_VERSION);
         version_to_str(ams_version, AMS_VERSION);
-        version_to_str(ams_target_version, AMS_TARGET_VERSION);
-        keygen_to_str(ams_keygen, AMS_KEYGEN);
-        hash_to_str(ams_hash, AMS_HASH >> 32);
-        ms_2_str(patch_time, diff_ns/1000ULL/1000ULL);
-
-        // defined in the Makefile
-        #define DATE (DATE_DAY "." DATE_MONTH "." DATE_YEAR " " DATE_HOUR ":" DATE_MIN ":" DATE_SEC)
+        ms_2_str(patch_time, diff_ns / 1000ULL / 1000ULL);
 
         ini_puts("stats", "version", VERSION_WITH_HASH, log_path);
-        ini_puts("stats", "build_date", DATE, log_path);
+        ini_puts("stats", "build_date", BUILD_DATE, log_path);
         ini_puts("stats", "fw_version", fw_version, log_path);
         ini_puts("stats", "ams_version", ams_version, log_path);
-        ini_puts("stats", "ams_target_version", ams_target_version, log_path);
-        ini_puts("stats", "ams_keygen", ams_keygen, log_path);
-        ini_puts("stats", "ams_hash", ams_hash, log_path);
         ini_putl("stats", "is_emummc", emummc, log_path);
-        ini_putl("stats", "heap_size", INNER_HEAP_SIZE, log_path);
-        ini_putl("stats", "buffer_size", READ_BUFFER_SIZE, log_path);
         ini_puts("stats", "patch_time", patch_time, log_path);
     }
 
@@ -645,12 +505,12 @@ u32 __nx_fs_num_sessions = 1;
 // Newlib heap configuration function (makes malloc/free work).
 void __libnx_initheap(void) {
     static char inner_heap[INNER_HEAP_SIZE];
-    extern char* fake_heap_start;
-    extern char* fake_heap_end;
+    extern char *fake_heap_start;
+    extern char *fake_heap_end;
 
     // Configure the newlib heap.
     fake_heap_start = inner_heap;
-    fake_heap_end   = inner_heap + sizeof(inner_heap);
+    fake_heap_end = inner_heap + sizeof(inner_heap);
 }
 
 // Service initialization.
@@ -674,16 +534,9 @@ void __appInit(void) {
     // get ams version
     if (R_SUCCEEDED(rc = splInitialize())) {
         u64 v{};
-        u64 hash{};
         if (R_SUCCEEDED(rc = splGetConfig((SplConfigItem)65000, &v))) {
             AMS_VERSION = (v >> 40) & 0xFFFFFF;
-            AMS_KEYGEN = (v >> 32) & 0xFF;
-            AMS_TARGET_VERSION = v & 0xFFFFFF;
         }
-        if (R_SUCCEEDED(rc = splGetConfig((SplConfigItem)65003, &hash))) {
-            AMS_HASH = hash;
-        }
-
         splExit();
     }
 
