@@ -128,7 +128,7 @@ constexpr auto mov2_cond(u32 inst) -> bool {
 }
 
 constexpr auto ctest_cond(u32 inst) -> bool {
-    return std::byteswap(0xF50301AA) == inst; // mov x21, x1
+    return true;
 }
 
 // to view patches, use https://armconverter.com/?lock=arm64
@@ -156,7 +156,7 @@ constexpr auto ctest_applied(const u8 *data, u32 inst) -> bool {
 }
 
 constinit Patterns fs_patterns[] = {
-    {"noncasigchk", "0x4010003602258052", 0, 0, tbz_cond, nop_patch, nop_applied, true},
+    {"noncasigchk", "0x003602258052", -2, 0, tbz_cond, nop_patch, nop_applied, true},
 };
 
 constinit Patterns ldr_patterns[] = {
@@ -164,12 +164,11 @@ constinit Patterns ldr_patterns[] = {
 };
 
 constinit Patterns es_patterns[] = {
-    {"es", "0x33D28552", 28, 0, mov2_cond, mov0_patch, mov0_applied, true},
+    {"es", "0x33D28552", -52, 0, mov2_cond, mov0_patch, mov0_applied, true},
 };
 
 constinit Patterns nifm_patterns[] = {
-    {"ctest", "....................F40300AA....F30314AAE00314AA9F0201397F8E04F8",
-     16, -16, ctest_cond, ctest_patch, ctest_applied, true},
+    {"ctest", "0x213042F9", 0, 4, ctest_cond, mov0_patch, mov0_applied, true},
 };
 
 // https://switchbrew.org/wiki/Title_list
