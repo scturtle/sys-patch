@@ -127,24 +127,18 @@ class GuiLog final : public tsl::Gui {
                     user->list->addItem(new tsl::elm::CategoryHeader("Log: " + user->last_section));
                 }
 
-#define F(x) ((x) >> 4) // 8bit -> 4bit
-                constexpr tsl::Color colour_syspatch{F(0), F(255), F(200), F(255)};
-                constexpr tsl::Color colour_file{F(255), F(177), F(66), F(255)};
-                constexpr tsl::Color colour_unpatched{F(250), F(90), F(58), F(255)};
-#undef F
-
                 if (value.starts_with("Patched")) {
                     if (value.ends_with("(sys-patch)")) {
-                        user->list->addItem(new tsl::elm::ListItem(Key, "Patched", colour_syspatch));
+                        user->list->addItem(new tsl::elm::ListItem(Key, "Patched"));
                     } else {
-                        user->list->addItem(new tsl::elm::ListItem(Key, "Patched", colour_file));
+                        user->list->addItem(new tsl::elm::ListItem(Key, "Patched"));
                     }
                 } else if (value.starts_with("Unpatched") || value.starts_with("Disabled")) {
-                    user->list->addItem(new tsl::elm::ListItem(Key, Value, colour_unpatched));
+                    user->list->addItem(new tsl::elm::ListItem(Key, Value));
                 } else if (user->last_section == "stats") {
-                    user->list->addItem(new tsl::elm::ListItem(Key, Value, tsl::style::color::ColorDescription));
+                    user->list->addItem(new tsl::elm::ListItem(Key, Value));
                 } else {
-                    user->list->addItem(new tsl::elm::ListItem(Key, Value, tsl::style::color::ColorText));
+                    user->list->addItem(new tsl::elm::ListItem(Key, Value));
                 }
 
                 return 1;
