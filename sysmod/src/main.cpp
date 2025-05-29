@@ -127,15 +127,10 @@ constexpr auto mov2_cond(u32 inst) -> bool {
     return (inst >> 24) == 0x2A;
 }
 
-constexpr auto ctest_cond(u32 inst) -> bool {
-    return true;
-}
-
 // to view patches, use https://armconverter.com/?lock=arm64
 constexpr auto nop_patch(u32 inst) -> PatchData { return "0x1F2003D5"; }
 constexpr auto subs_patch(u32 inst) -> PatchData { return "0x00"; }
 constexpr auto mov0_patch(u32 inst) -> PatchData { return "0xE0031FAA"; }
-constexpr auto ctest_patch(u32 inst) -> PatchData { return "0xE0031FAAC0035FD6"; }
 
 constexpr auto nop_applied(const u8 *data, u32 inst) -> bool {
     return nop_patch(inst).cmp(data);
@@ -151,24 +146,16 @@ constexpr auto mov0_applied(const u8 *data, u32 inst) -> bool {
     return mov0_patch(inst).cmp(data);
 }
 
-constexpr auto ctest_applied(const u8 *data, u32 inst) -> bool {
-    return ctest_patch(inst).cmp(data);
-}
-
 constinit Patterns fs_patterns[] = {
     {"noncasigchk", "0x003602258052", -2, 0, tbz_cond, nop_patch, nop_applied, true},
 };
 
 constinit Patterns ldr_patterns[] = {
-    {"noacidsigchk", "0xFD7B.A8C0035FD6", 16, 2, subs_cond, subs_patch, subs_applied, true},
+    {"noacidsigchk", "0xC0035FD6..009401C0", 12, 2, subs_cond, subs_patch, subs_applied, true},
 };
 
 constinit Patterns es_patterns[] = {
-    {"es", "0x33D28552", -52, 0, mov2_cond, mov0_patch, mov0_applied, true},
-};
-
-constinit Patterns nifm_patterns[] = {
-    {"ctest", "0x213042F9", 0, 4, ctest_cond, mov0_patch, mov0_applied, true},
+    {"es", "0xE003132AF44F52A9", 0, 0, mov2_cond, mov0_patch, mov0_applied, true},
 };
 
 // https://switchbrew.org/wiki/Title_list
@@ -176,7 +163,6 @@ constinit PatchEntry patches[] = {
     {"fs", 0x0100000000000000, fs_patterns},
     {"ldr", 0x0100000000000001, ldr_patterns},
     {"es", 0x0100000000000033, es_patterns},
-    {"nifm", 0x010000000000000F, nifm_patterns},
 };
 
 struct EmummcPaths {
@@ -470,8 +456,6 @@ int main(int argc, char *argv[]) {
         char fw_version[12]{};
         // atmosphere version
         char ams_version[12]{};
-        // lowest fw supported by atmosphere
-        char ams_target_version[12]{};
         // how long it took to patch
         char patch_time[20]{};
 

@@ -89,9 +89,6 @@ class GuiToggle final : public tsl::Gui {
         list->addItem(new tsl::elm::CategoryHeader("ES - 0100000000000033"));
         list->addItem(config_es.create_list_item("es"));
 
-        list->addItem(new tsl::elm::CategoryHeader("NIFM - 010000000000000F"));
-        list->addItem(config_ctest.create_list_item("ctest"));
-
         frame->setContent(list);
         return frame;
     }
@@ -99,7 +96,6 @@ class GuiToggle final : public tsl::Gui {
     ConfigEntry config_noncasigchk{"fs", "noncasigchk", true};
     ConfigEntry config_noacidsigchk{"ldr", "noacidsigchk", true};
     ConfigEntry config_es{"es", "es", true};
-    ConfigEntry config_ctest{"nifm", "ctest", false};
 };
 
 class GuiLog final : public tsl::Gui {
