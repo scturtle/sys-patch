@@ -147,7 +147,7 @@ constexpr auto mov0_applied(const u8 *data, u32 inst) -> bool {
 }
 
 constinit Patterns fs_patterns[] = {
-    {"noncasigchk", "0x003602258052", -2, 0, tbz_cond, nop_patch, nop_applied, true},
+    {"noncasigchk", "0x00090036e0230191", 0, 0, tbz_cond, nop_patch, nop_applied, true},
 };
 
 constinit Patterns ldr_patterns[] = {
